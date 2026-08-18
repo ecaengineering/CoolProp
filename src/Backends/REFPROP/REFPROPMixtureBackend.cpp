@@ -25,6 +25,14 @@ surface tension                 N/m
 #define REFPROP_IMPLEMENTATION
 #define REFPROP_CSTYLE_REFERENCES
 #include <REFPROP_lib.h>
+#ifdef COOLPROP_REFPROP_STATIC_LINK
+// Declares the mangled Fortran symbols of a statically-linked librefprop.a
+// and bind_REFPROP_static(), which points every *dll pointer above at them
+// directly - see REFPROP_supported() below. Must come before the #undefs,
+// since it still needs DOUBLE_REF/INT_REF (REFPROP_CSTYLE_REFERENCES) and
+// the *_ARGS/*_POINTER macros REFPROP_lib.h just defined.
+#include "refprop_static_bindings.h"
+#endif
 #undef REFPROP_IMPLEMENTATION
 #undef REFPROP_CSTYLE_REFERENCES
 
@@ -221,9 +229,13 @@ REFPROPMixtureBackend::~REFPROPMixtureBackend() {
     // Decrement the counter for the number of instances
     REFPROPMixtureBackend::instance_counter--;
     // Unload the shared library when the last instance is about to be destroyed
+    // (nothing to unload in COOLPROP_REFPROP_STATIC_LINK mode - the Fortran
+    // routines are linked directly into this binary, not dlopen()'d)
+#ifndef COOLPROP_REFPROP_STATIC_LINK
     if (REFPROPMixtureBackend::instance_counter == 0) {
         force_unload_REFPROP();
     }
+#endif
 }
 void REFPROPMixtureBackend::check_loaded_fluid() {
     this->set_REFPROP_fluids(this->fluid_names);
@@ -242,6 +254,17 @@ bool REFPROPMixtureBackend::REFPROP_supported() {
     // Abort check if Refprop has been loaded.
     if (RefpropdllInstance != nullptr) return true;
 
+#ifdef COOLPROP_REFPROP_STATIC_LINK
+    // REFPROP's Fortran routines are linked directly into this binary (see
+    // refprop_static_bindings.h) rather than dlopen()'d at runtime, so there's
+    // no shared library to locate/load - just point the *dll pointers at the
+    // linked-in symbols. RefpropdllInstance only needs to be non-null here to
+    // satisfy the "already loaded" check above and the instance-counting in
+    // the constructor/destructor; it's never dereferenced as a real handle.
+    bind_REFPROP_static();
+    RefpropdllInstance = reinterpret_cast<void*>(1);
+    return true;
+#else
     // Store result of previous check.
     if (_REFPROP_supported) {
         // Either Refprop is supported or it is the first check.
@@ -298,6 +321,7 @@ bool REFPROPMixtureBackend::REFPROP_supported() {
         return false;
     }
     return false;
+#endif  // COOLPROP_REFPROP_STATIC_LINK
 }
 std::string REFPROPMixtureBackend::version() {
     int N = -1;
